@@ -23,7 +23,7 @@
 
 static voidFuncPtr ISRcallback[EXTERNAL_NUM_INTERRUPTS];
 static uint32_t    ISRlist[EXTERNAL_NUM_INTERRUPTS];
-static uint32_t    nints; // Stores total number of attached interrupts
+static uint32_t    nints = (uint32_t)-1; // Stores total number of attached interrupts; initialization with -1 prevents another static variable (enabled)
 
 /* Configure I/O interrupt sources */
 static void __initialize()
@@ -37,7 +37,7 @@ static void __initialize()
   NVIC_SetPriority(EIC_IRQn, 0);
   NVIC_EnableIRQ(EIC_IRQn);
 
-  // Enable GCLK for IEC (External Interrupt Controller)
+  // Enable GCLK for EIC (External Interrupt Controller)
   GCLK->CLKCTRL.reg = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN_GCLK0 | GCLK_CLKCTRL_ID(GCM_EIC));
 
 /* Shall we do that?
@@ -57,7 +57,6 @@ static void __initialize()
  */
 void attachInterrupt(pin_size_t pin, voidFuncPtr callback, PinStatus mode)
 {
-  static int enabled = 0;
   uint32_t config;
   uint32_t pos;
 
@@ -69,10 +68,8 @@ void attachInterrupt(pin_size_t pin, voidFuncPtr callback, PinStatus mode)
   if (in == NOT_AN_INTERRUPT || in == EXTERNAL_INT_NMI)
     return;
 
-  if (!enabled) {
+  if (nints == (uint32_t)-1)
     __initialize();
-    enabled = 1;
-  }
 
   // Enable wakeup capability on pin in case being used during sleep
   uint32_t inMask = 1 << in;
@@ -170,10 +167,9 @@ void detachInterrupt(pin_size_t pin)
   if (current == nints) return; // We didn't have it
 
   // Shift the reminder down
-  for (; current<nints-1; current++) {
-    ISRlist[current]     = ISRlist[current+1];
-    ISRcallback[current] = ISRcallback[current+1];
-  }
+  if(current < nints - 1) {
+    memmove(ISRlist + current, ISRlist + current + 1, (nints - 1 - current)*sizeof(uint32_t));
+    memmove(ISRcallback + current, ISRcallback + current + 1, (nints - 1 - current)*sizeof(uint32_t));
   nints--;
 }
 
@@ -186,14 +182,12 @@ void EIC_Handler(void)
   // Depending on where you are in the list it will take longer
 
   // Loop over all enabled interrupts in the list
-  for (uint32_t i=0; i<nints; i++)
-  {
-    if ((EIC->INTFLAG.reg & ISRlist[i]) != 0)
-    {
+  for (uint32_t i=0; i<nints; i++) {
+    if ((EIC->INTFLAG.reg & ISRlist[i]) != 0) {
       // Call the callback function
       ISRcallback[i]();
       // Clear the interrupt
-      EIC->INTFLAG.reg = ISRlist[i];
+      break; // found
     }
   }
 }
